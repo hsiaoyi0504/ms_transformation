@@ -1,52 +1,54 @@
-import cv2
 import csv
 import numpy as np
+from skimage import img_as_ubyte
+from skimage.io import imread, imsave
+from skimage.color import gray2rgb, rgb2gray
+from skimage.transform import resize, AffineTransform, warp
+from skimage.measure import ransac
+from skimage.feature import match_descriptors, ORB, plot_matches
+import matplotlib.pyplot as plt
 
-MAX_FEATURES = 700
-GOOD_MATCH_PERCENT = 1
+MAX_FEATURES = 400
+
+np.random.seed(seed=1)
 
 
-def alignImages(im1, im2, i):
+def alignImages(im1, im2, output_file):
     # Convert images to grayscale
-    im1Gray = cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
-    im2Gray = cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
+    im1Gray = rgb2gray(im1)
+    im2Gray = rgb2gray(im2)
 
     # Detect ORB features and compute descriptors.
-    orb = cv2.ORB_create(MAX_FEATURES)
-    keypoints1, descriptors1 = orb.detectAndCompute(im1Gray, None)
-    keypoints2, descriptors2 = orb.detectAndCompute(im2Gray, None)
+    extractor = ORB(n_keypoints=MAX_FEATURES, fast_threshold=0.05)
+    extractor.detect_and_extract(im1Gray)
+    keypoints1 = extractor.keypoints
+    descriptors1 = extractor.descriptors
+
+    extractor.detect_and_extract(im2Gray)
+    keypoints2 = extractor.keypoints
+    descriptors2 = extractor.descriptors
 
     # Match features.
-    matcher = cv2.DescriptorMatcher_create(cv2.DESCRIPTOR_MATCHER_BRUTEFORCE_HAMMING)
-    matches = matcher.match(descriptors1, descriptors2, None)
+    matches = match_descriptors(descriptors1, descriptors2, cross_check=True)
 
-    # Sort matches by score
-    matches.sort(key=lambda x: x.distance, reverse=False)
+    # Draw matchs
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+    plot_matches(ax, im1, im2, keypoints1, keypoints2, matches)
+    plt.savefig(output_file)
 
-    # Remove not so good matches
-    numGoodMatches = int(len(matches) * GOOD_MATCH_PERCENT)
-    matches = matches[:numGoodMatches]
+    src = []
+    dst = []
+    for i in range(len(matches)):
+        src.append(keypoints1[matches[i][0]])
+        dst.append(keypoints2[matches[i][1]])
+    src = np.array(src)
+    dst = np.array(dst)
 
-    # Draw top matches
-    imMatches = cv2.drawMatches(im1, keypoints1, im2, keypoints2, matches, None)
-    cv2.imwrite("matches{}.jpg".format(i), imMatches)
+    model, inliers = ransac((src, dst), AffineTransform, min_samples=3, residual_threshold=2, max_trials=500)
 
-    # Extract location of good matches
-    points1 = np.zeros((len(matches), 2), dtype=np.float32)
-    points2 = np.zeros((len(matches), 2), dtype=np.float32)
+    warped = warp(im1, model, output_shape=im2.shape)
 
-    for i, match in enumerate(matches):
-        points1[i, :] = keypoints1[match.queryIdx].pt
-        points2[i, :] = keypoints2[match.trainIdx].pt
-
-    # Find homography
-    h, mask = cv2.findHomography(points1, points2, cv2.RANSAC)
-
-    # Use homography
-    height, width, channels = im2.shape
-    im1Reg = cv2.warpPerspective(im1, h, (width, height))
-
-    return im1Reg, h
+    return (warped, model.params)
 
 
 if __name__ == '__main__':
@@ -60,23 +62,20 @@ if __name__ == '__main__':
 
     for i, (file1, file2, file3) in enumerate(file_pairs):  # file1 is the reference from pathology slice
         try:
-            img = cv2.imread(file1)
-
+            img = imread(file1)
+            img = np.rot90(img)
             with open(file2, newline='') as csvfile:
                 reader = csv.reader(csvfile)
                 width = 0
-                data = np.array(list(reader), dtype=np.float32)
+                data = np.array(list(reader), dtype=np.float)
 
-            data = data / np.amax(data) * 255  # scale to float (0~255)
-            data = cv2.merge((data, data, data))
-            data = cv2.resize(data, img.shape[1::-1])
-            data = data.astype(np.uint8)
-            cv2.imwrite(file3, data)
-            # print(data.shape)
-            # cv2.imshow('image', data)
-            # cv2.waitKey(0)
+            data = resize(data, img.shape[0:2], anti_aliasing=True)
+            data = (data - np.amin(data)) / (np.amax(data) - np.amin(data))
+            data = gray2rgb(data)
+            data = img_as_ubyte(data)
+            imsave(file3, data)
 
-            imReg, h = alignImages(data, img, i)
+            imReg, h = alignImages(data, img, 'matches{}.png'.format(i))
+            imsave('warped{}.png'.format(i), imReg)
         except Exception as e:
-            # raise e
-            pass
+            raise e
