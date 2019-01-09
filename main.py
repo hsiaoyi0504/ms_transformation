@@ -8,8 +8,7 @@ from skimage.measure import ransac
 from skimage.feature import match_descriptors, ORB, plot_matches
 import matplotlib.pyplot as plt
 
-MAX_FEATURES = 300
-GOOD_MATCH_PERCENT = 1
+MAX_FEATURES = 400
 
 np.random.seed(seed=1)
 
@@ -64,12 +63,13 @@ if __name__ == '__main__':
     for i, (file1, file2, file3) in enumerate(file_pairs):  # file1 is the reference from pathology slice
         try:
             img = imread(file1)
+            img = np.rot90(img)
             with open(file2, newline='') as csvfile:
                 reader = csv.reader(csvfile)
                 width = 0
                 data = np.array(list(reader), dtype=np.float)
 
-            data = resize(data, img.shape[1::-1])
+            data = resize(data, img.shape[0:2], anti_aliasing=True)
             data = (data - np.amin(data)) / (np.amax(data) - np.amin(data))
             data = gray2rgb(data)
             data = img_as_ubyte(data)
